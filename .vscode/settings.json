@@ -6,5 +6,6 @@
     "default": true
   },
   "editor.experimental.treeSitterTelemetry": true,
-  "IDX.corgiMode": false
+  "IDX.corgiMode": false,
+  "claudeCodeChat.permissions.yoloMode": true
 }
