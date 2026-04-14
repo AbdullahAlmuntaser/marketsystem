@@ -7,5 +7,6 @@
   },
   "editor.experimental.treeSitterTelemetry": true,
   "IDX.corgiMode": false,
-  "claudeCodeChat.permissions.yoloMode": true
+  "claudeCodeChat.permissions.yoloMode": true,
+  "gemini-cli.debug.logging.enabled": true
 }
