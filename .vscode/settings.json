@@ -12,6 +12,6 @@
   "claudeCodeChat.permissions.yoloMode": true,
   "gemini-cli.debug.logging.enabled": true,
   "qwen.enabled": true,
-  "qwen.apiKey": "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",
+  "qwen.apiKey": "sk-173ffbfcf9ab46d5ba2555b04768e555",
   "qwen.model": "qwen-coder"
 }
