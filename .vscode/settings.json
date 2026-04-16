@@ -3,10 +3,15 @@
   "geminicodeassist.outlines.automaticOutlineGeneration": true,
   "workbench.editor.alwaysShowEditorActions": true,
   "workbench.editor.autoLockGroups": {
-    "default": true
+    "default": true,
+    "workbench.input.interactive": true,
+    "workbench.editors.gettingStartedInput": true
   },
   "editor.experimental.treeSitterTelemetry": true,
   "IDX.corgiMode": false,
   "claudeCodeChat.permissions.yoloMode": true,
-  "gemini-cli.debug.logging.enabled": true
+  "gemini-cli.debug.logging.enabled": true,
+  "qwen.enabled": true,
+  "qwen.apiKey": "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",
+  "qwen.model": "qwen-coder"
 }
