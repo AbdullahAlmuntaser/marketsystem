@@ -11,5 +11,7 @@
   "IDX.corgiMode": false,
   "claudeCodeChat.permissions.yoloMode": true,
   "gemini-cli.debug.logging.enabled": true,
+  "IDX.aI.enableCodebaseIndexing": true,
+  "IDX.aI.enableInlineCompletion": true,
   
 }
