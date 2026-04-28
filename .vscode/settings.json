@@ -1,12 +1,5 @@
 {
   "IDX.agenticWorkspace": true,
   "geminicodeassist.outlines.automaticOutlineGeneration": true,
-  "workbench.editor.alwaysShowEditorActions": true,
-  "workbench.editor.autoLockGroups": {
-    "default": true,
-    "workbench.input.interactive": true,
-    "workbench.editors.gettingStartedInput": true,
-    "workbench.editor.chatSession": false
-  },
-  "workbench.editor.enablePreview": true,
+  "scm.inputFontFamily": "Cascadia Code ",
 }
