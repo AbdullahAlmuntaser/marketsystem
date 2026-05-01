@@ -669,7 +669,10 @@ class AccountingService {
     final dao = db.accountingDao;
     final parent = await dao.getAccountByCode(codeAccountsReceivable);
     if (parent == null) {
-      throw Exception('Accounts Receivable header account not found');
+      throw const DatabaseFailure(
+        'حساب العملاء الرئيسي غير موجود في شجرة الحسابات',
+        code: 'DB_MISSING_ACCOUNT',
+      );
     }
 
     final existingSubAccounts = await (db.select(
@@ -699,7 +702,10 @@ class AccountingService {
     final dao = db.accountingDao;
     final parent = await dao.getAccountByCode(codeAccountsPayable);
     if (parent == null) {
-      throw Exception('Accounts Payable header account not found');
+      throw const DatabaseFailure(
+        'حساب الموردين الرئيسي غير موجود في شجرة الحسابات',
+        code: 'DB_MISSING_ACCOUNT',
+      );
     }
 
     final existingSubAccounts = await (db.select(
@@ -726,9 +732,17 @@ class AccountingService {
   }
 
   Future<void> postSale(Sale sale, List<SaleItem> items) async {
+    // التحقق من الفترة المحاسبية
     if (await db.accountingDao.isDateInClosedPeriod(sale.createdAt)) {
-      throw Exception('Cannot post sale in a closed accounting period.');
+      throw const AccountingPeriodFailure();
     }
+    
+    // التحقق من أن الفاتورة تحتوي على عناصر
+    if (items.isEmpty) {
+      throw const ValidationFailure('لا يمكن حفظ فاتورة بدون عناصر', 
+        fieldErrors: {'items': 'يجب إضافة منتج واحد على الأقل'});
+    }
+    
     await db.transaction(() async {
       final dao = db.accountingDao;
       final entryId = const Uuid().v4();
@@ -736,25 +750,35 @@ class AccountingService {
       String debitAccountId;
       if (sale.isCredit) {
         if (sale.customerId == null) {
-          throw Exception('Credit sale must have a customer.');
+          throw const ValidationFailure('المبيعات الآجلة تتطلب تحديد عميل',
+            fieldErrors: {'customerId': 'يجب اختيار عميل للمبيعات الآجلة'});
         }
         final customer = await db.customersDao.getCustomerById(sale.customerId!);
         if (customer?.accountId == null) {
-          debitAccountId = (await dao.getAccountByCode(
-            codeAccountsReceivable,
-          ))!.id;
+          final arAccount = await dao.getAccountByCode(codeAccountsReceivable);
+          if (arAccount == null) {
+            throw const DatabaseFailure('حساب العملاء غير موجود في شجرة الحسابات',
+              code: 'DB_MISSING_ACCOUNT');
+          }
+          debitAccountId = arAccount.id;
         } else {
           debitAccountId = customer!.accountId!;
         }
       } else {
-        debitAccountId = (await dao.getAccountByCode(codeCash))!.id;
+        final cashAccount = await dao.getAccountByCode(codeCash);
+        if (cashAccount == null) {
+          throw const DatabaseFailure('حساب الصندوق غير موجود في شجرة الحسابات',
+            code: 'DB_MISSING_ACCOUNT');
+        }
+        debitAccountId = cashAccount.id;
       }
 
       final revenueAccount = await dao.getAccountByCode(codeSalesRevenue);
       final taxAccount = await dao.getAccountByCode(codeOutputVAT);
 
       if (revenueAccount == null || taxAccount == null) {
-        throw Exception('Missing one or more required GL accounts for sale.');
+        throw const DatabaseFailure('حسابات المبيعات أو الضريبة غير موجودة',
+          code: 'DB_MISSING_ACCOUNT');
       }
 
       final entry = GLEntriesCompanion.insert(
@@ -824,6 +848,16 @@ class AccountingService {
       // Calculate total cost for COGS
       double totalCost = 0.0;
       for (var item in items) {
+        // التحقق من صحة الكميات والأسعار
+        if (item.quantity <= 0) {
+          throw ValidationFailure('الكمية يجب أن تكون أكبر من صفر',
+            fieldErrors: {'quantity': 'الكمية غير صحيحة'});
+        }
+        if (item.price <= 0) {
+          throw ValidationFailure('السعر يجب أن يكون أكبر من صفر',
+            fieldErrors: {'price': 'السعر غير صحيح'});
+        }
+        
         final product = await db.productsDao.getProductById(item.productId);
         if (product != null) {
           totalCost += (item.quantity * item.unitFactor) * product.buyPrice;
@@ -867,9 +901,17 @@ class AccountingService {
     });
   }
   Future<void> postPurchase(Purchase purchase, List<PurchaseItem> items) async {
+    // التحقق من الفترة المحاسبية
     if (await db.accountingDao.isDateInClosedPeriod(purchase.date)) {
-      throw Exception('Cannot post purchase in a closed accounting period.');
+      throw const AccountingPeriodFailure();
     }
+    
+    // التحقق من أن الفاتورة تحتوي على عناصر
+    if (items.isEmpty) {
+      throw const ValidationFailure('لا يمكن حفظ فاتورة مشتريات بدون عناصر',
+        fieldErrors: {'items': 'يجب إضافة منتج واحد على الأقل'});
+    }
+    
     await db.transaction(() async {
       final dao = db.accountingDao;
       final entryId = const Uuid().v4();
@@ -880,20 +922,46 @@ class AccountingService {
       String creditAccountId;
       if (purchase.isCredit) {
         if (purchase.supplierId == null) {
-          throw Exception('Credit purchase must have a supplier.');
+          throw const ValidationFailure('المشتريات الآجلة تتطلب تحديد مورد',
+            fieldErrors: {'supplierId': 'يجب اختيار مورد للمشتريات الآجلة'});
         }
         final supplier = await db.suppliersDao.getSupplierById(
           purchase.supplierId!,
         );
-        creditAccountId =
-            supplier?.accountId ??
-            (await dao.getAccountByCode(codeAccountsPayable))!.id;
+        if (supplier?.accountId == null) {
+          final apAccount = await dao.getAccountByCode(codeAccountsPayable);
+          if (apAccount == null) {
+            throw const DatabaseFailure('حساب الموردين غير موجود في شجرة الحسابات',
+              code: 'DB_MISSING_ACCOUNT');
+          }
+          creditAccountId = apAccount.id;
+        } else {
+          creditAccountId = supplier!.accountId!;
+        }
       } else {
-        creditAccountId = (await dao.getAccountByCode(codeCash))!.id;
+        final cashAccount = await dao.getAccountByCode(codeCash);
+        if (cashAccount == null) {
+          throw const DatabaseFailure('حساب الصندوق غير موجود في شجرة الحسابات',
+            code: 'DB_MISSING_ACCOUNT');
+        }
+        creditAccountId = cashAccount.id;
       }
 
       if (inventoryAccount == null || taxAccount == null) {
-        throw Exception('Missing GL accounts for purchase.');
+        throw const DatabaseFailure('حسابات المخزون أو الضريبة غير موجودة',
+          code: 'DB_MISSING_ACCOUNT');
+      }
+
+      // التحقق من صحة الكميات والأسعار
+      for (var item in items) {
+        if (item.quantity <= 0) {
+          throw ValidationFailure('الكمية يجب أن تكون أكبر من صفر',
+            fieldErrors: {'quantity': 'الكمية غير صحيحة'});
+        }
+        if (item.price <= 0) {
+          throw ValidationFailure('السعر يجب أن يكون أكبر من صفر',
+            fieldErrors: {'price': 'السعر غير صحيح'});
+        }
       }
 
       final inventoryValue = purchase.total - purchase.tax;
@@ -969,6 +1037,12 @@ class AccountingService {
     required String currencyId,
     required double exchangeRate,
   }) async {
+    // التحقق من صحة المبلغ
+    if (amount <= 0) {
+      throw const ValidationFailure('المبلغ يجب أن يكون أكبر من صفر',
+        fieldErrors: {'amount': 'المبلغ غير صحيح'});
+    }
+    
     final dao = db.accountingDao;
     final entryId = const Uuid().v4();
 
@@ -976,14 +1050,19 @@ class AccountingService {
     final paymentAccount = await dao.getAccountByCode(paymentAccountCode);
 
     if (arAccount == null || paymentAccount == null) {
-      throw Exception('AR or Payment account not found.');
+      throw const DatabaseFailure('حساب العملاء أو حساب الدفع غير موجود',
+        code: 'DB_MISSING_ACCOUNT');
     }
 
     final customer = await db.customersDao.getCustomerById(customerId);
+    if (customer == null) {
+      throw const DatabaseFailure('العميل غير موجود',
+        code: 'DB_CUSTOMER_NOT_FOUND');
+    }
 
     final entry = GLEntriesCompanion.insert(
       id: Value(entryId),
-      description: 'Payment from ${customer?.name ?? "Customer"}',
+      description: 'Payment from ${customer.name ?? "Customer"}',
       date: Value(DateTime.now()),
       referenceType: const Value('CUSTOMER_PAYMENT'),
       referenceId: Value(customerId),
@@ -1014,6 +1093,16 @@ class AccountingService {
     ];
 
     await dao.createEntry(entry, lines);
+    
+    // تسجيل في حركات الحساب
+    await _recordAccountTransaction(
+      accountId: arAccount.id,
+      type: 'PAYMENT',
+      referenceId: customerId,
+      credit: amount,
+      date: DateTime.now(),
+      branchId: 'BR001',
+    );
   }
 
   Future<void> recordPaymentToSupplier({
@@ -1023,6 +1112,12 @@ class AccountingService {
     required String currencyId,
     required double exchangeRate,
   }) async {
+    // التحقق من صحة المبلغ
+    if (amount <= 0) {
+      throw const ValidationFailure('المبلغ يجب أن يكون أكبر من صفر',
+        fieldErrors: {'amount': 'المبلغ غير صحيح'});
+    }
+    
     final dao = db.accountingDao;
     final entryId = const Uuid().v4();
 
@@ -1030,12 +1125,19 @@ class AccountingService {
     final paymentAccount = await dao.getAccountByCode(paymentAccountCode);
 
     if (apAccount == null || paymentAccount == null) {
-      throw Exception('AP or Payment account not found.');
+      throw const DatabaseFailure('حساب الموردين أو حساب الدفع غير موجود',
+        code: 'DB_MISSING_ACCOUNT');
+    }
+
+    final supplier = await db.suppliersDao.getSupplierById(supplierId);
+    if (supplier == null) {
+      throw const DatabaseFailure('المورد غير موجود',
+        code: 'DB_SUPPLIER_NOT_FOUND');
     }
 
     final entry = GLEntriesCompanion.insert(
       id: Value(entryId),
-      description: 'Payment to Supplier',
+      description: 'Payment to Supplier ${supplier.name}',
       date: Value(DateTime.now()),
       referenceType: const Value('SUPPLIER_PAYMENT'),
       referenceId: Value(supplierId),
@@ -1066,6 +1168,16 @@ class AccountingService {
     ];
 
     await dao.createEntry(entry, lines);
+    
+    // تسجيل في حركات الحساب
+    await _recordAccountTransaction(
+      accountId: apAccount.id,
+      type: 'PAYMENT',
+      referenceId: supplierId,
+      debit: amount,
+      date: DateTime.now(),
+      branchId: 'BR001',
+    );
   }
 
   Future<void> recordCheckCollected(Check check) async {
@@ -1092,7 +1204,10 @@ class AccountingService {
     }
 
     if (primaryAccount == null || secondaryAccount == null) {
-      throw Exception('Required GL accounts not found.');
+      throw const DatabaseFailure(
+        'حسابات القيود المطلوبة غير موجودة في شجرة الحسابات',
+        code: 'DB_MISSING_ACCOUNT',
+      );
     }
 
     final entry = GLEntriesCompanion.insert(
@@ -1153,7 +1268,10 @@ class AccountingService {
     }
 
     if (primaryAccount == null || secondaryAccount == null) {
-      throw Exception('Required GL accounts not found.');
+      throw const DatabaseFailure(
+        'حسابات القيود المطلوبة غير موجودة في شجرة الحسابات',
+        code: 'DB_MISSING_ACCOUNT',
+      );
     }
 
     final entry = GLEntriesCompanion.insert(
@@ -1194,9 +1312,23 @@ class AccountingService {
     SalesReturn saleReturn,
     List<SalesReturnItem> items,
   ) async {
+    // التحقق من الفترة المحاسبية
+    if (await db.accountingDao.isDateInClosedPeriod(saleReturn.createdAt)) {
+      throw const AccountingPeriodFailure();
+    }
+    
+    // التحقق من وجود عناصر في المرتجع
+    if (items.isEmpty) {
+      throw const ValidationFailure('لا يمكن حفظ مرتجع مبيعات بدون عناصر',
+        fieldErrors: {'items': 'يجب إضافة منتج واحد على الأقل'});
+    }
+    
     final dao = db.accountingDao;
     final originalSale = await db.salesDao.getSaleById(saleReturn.saleId);
-    if (originalSale == null) throw Exception('Original sale not found.');
+    if (originalSale == null) {
+      throw const DatabaseFailure('الفاتورة الأصلية غير موجودة',
+        code: 'DB_SALE_NOT_FOUND');
+    }
 
     final entryId = const Uuid().v4();
     final salesReturnAccount = await dao.getAccountByCode(codeSalesReturns);
@@ -1208,7 +1340,16 @@ class AccountingService {
         taxAccount == null ||
         arAccount == null ||
         cashAccount == null) {
-      throw Exception('Missing accounts for sale return.');
+      throw const DatabaseFailure('حسابات المرتجعات أو الضريبة غير موجودة',
+        code: 'DB_MISSING_ACCOUNT');
+    }
+
+    // التحقق من صحة الكميات
+    for (var item in items) {
+      if (item.quantity <= 0) {
+        throw ValidationFailure('الكمية يجب أن تكون أكبر من صفر',
+          fieldErrors: {'quantity': 'الكمية غير صحيحة'});
+      }
     }
 
     final totalReturned = saleReturn.amountReturned;
@@ -1312,12 +1453,32 @@ class AccountingService {
     PurchaseReturn purchaseReturn,
     List<PurchaseReturnItem> items,
   ) async {
+    // التحقق من الفترة المحاسبية
+    if (await db.accountingDao.isDateInClosedPeriod(purchaseReturn.createdAt)) {
+      throw const AccountingPeriodFailure();
+    }
+    
+    // التحقق من وجود عناصر في المرتجع
+    if (items.isEmpty) {
+      throw const ValidationFailure('لا يمكن حفظ مرتجع مشتريات بدون عناصر',
+        fieldErrors: {'items': 'يجب إضافة منتج واحد على الأقل'});
+    }
+    
     final dao = db.accountingDao;
     final originalPurchase = await db.purchasesDao.getPurchaseById(
       purchaseReturn.purchaseId,
     );
     if (originalPurchase == null) {
-      throw Exception('Original purchase not found.');
+      throw const DatabaseFailure('فاتورة المشتريات الأصلية غير موجودة',
+        code: 'DB_PURCHASE_NOT_FOUND');
+    }
+
+    // التحقق من صحة الكميات
+    for (var item in items) {
+      if (item.quantity <= 0) {
+        throw ValidationFailure('الكمية يجب أن تكون أكبر من صفر',
+          fieldErrors: {'quantity': 'الكمية غير صحيحة'});
+      }
     }
 
     final entryId = const Uuid().v4();
@@ -1332,7 +1493,8 @@ class AccountingService {
         taxAccount == null ||
         apAccount == null ||
         cashAccount == null) {
-      throw Exception('Missing accounts for purchase return.');
+      throw const DatabaseFailure('حسابات المرتجعات أو الضريبة غير موجودة',
+        code: 'DB_MISSING_ACCOUNT');
     }
 
     final totalReturned = purchaseReturn.amountReturned;
@@ -1484,7 +1646,10 @@ class AccountingService {
     final inputVatAccount = await dao.getAccountByCode(codeInputVAT);
 
     if (outputVatAccount == null || inputVatAccount == null) {
-      throw Exception('Output VAT or Input VAT accounts not found.');
+      throw const DatabaseFailure(
+        'حسابات ضريبة القيمة المضافة غير موجودة في شجرة الحسابات',
+        code: 'DB_MISSING_ACCOUNT',
+      );
     }
 
     final outputVatLines =
